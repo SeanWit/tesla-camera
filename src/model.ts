@@ -5,28 +5,32 @@ export enum TypeEnum {
   '行车记录仪'
 }
 
-export enum CameraEnum {
-  '前',
-  '后',
-  '左',
-  '右'
+export const CAMERA_IDS = [
+  'front',
+  'back',
+  'left_repeater',
+  'right_repeater',
+  'left_pillar',
+  'right_pillar',
+] as const
+
+export type CameraId = typeof CAMERA_IDS[number]
+
+export interface CameraDefinition {
+  id: CameraId
+  label: string
+  shortLabel: string
+  shortcut?: string
 }
 
-export enum ExportStatusEnum {
-  进行中,
-  导出成功,
-  导出失败
-}
-
-export interface ExportTaskType {
-  path: string
-  name: string
-  exportDir: string
-  status: number
-  duration: number
-  progress: number
-  log: string[]
-}
+export const CAMERAS: CameraDefinition[] = [
+  { id: 'front', label: '前摄像头', shortLabel: '前', shortcut: 'W' },
+  { id: 'back', label: '后摄像头', shortLabel: '后', shortcut: 'S' },
+  { id: 'left_repeater', label: '左侧翼子板', shortLabel: '左侧', shortcut: 'A' },
+  { id: 'right_repeater', label: '右侧翼子板', shortLabel: '右侧', shortcut: 'D' },
+  { id: 'left_pillar', label: '左侧 B 柱', shortLabel: '左 B 柱', shortcut: 'Q' },
+  { id: 'right_pillar', label: '右侧 B 柱', shortLabel: '右 B 柱', shortcut: 'E' },
+]
 
 export interface FileData {
   get(): Promise<{ url: string; name: string }>
@@ -34,26 +38,28 @@ export interface FileData {
   path: string
 }
 
+export interface EventInfo {
+  time: number
+  city?: string
+  lat?: string
+  lon?: string
+  reason?: string
+  camera?: string
+}
+
 export interface OriginVideo {
   title: string
   time: number
   type: TypeEnum
   dir: string
-  src_f: FileData
-  src_b: FileData
-  src_r: FileData
-  src_l: FileData
-  event?: number
+  sources: Partial<Record<CameraId, FileData>>
+  event?: EventInfo
 }
 
-export interface OriginFSVideo {
-  title: string
-  time: number
-  type: TypeEnum
-  src_f: string
-  src_b: string
-  src_r: string
-  src_l: string
+export interface VideoSource {
+  url: string
+  name: string
+  path: string
 }
 
 export interface Video {
@@ -61,18 +67,8 @@ export interface Video {
   time: number
   type: TypeEnum
   dir: string
-  src_f: string
-  src_f_name: string
-  src_b: string
-  src_b_name: string
-  src_r: string
-  src_r_name: string
-  src_l: string
-  src_l_name: string
-  src_f_path: string
-  src_b_path: string
-  src_r_path: string
-  src_l_path: string
+  sources: Partial<Record<CameraId, VideoSource>>
+  event?: EventInfo
 }
 
 export interface ModelState {

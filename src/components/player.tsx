@@ -1,52 +1,66 @@
-import React, { useState, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   makeStyles,
   shorthands,
   tokens,
   Slider,
+  Button,
+  Tooltip,
+  Caption1,
 } from '@fluentui/react-components'
-import { Pause24Filled, Play24Filled } from '@fluentui/react-icons'
-import MiniPlay from './mini-player'
+import { Pause24Filled, Play24Filled, Copy24Regular } from '@fluentui/react-icons'
 import dayjs from 'dayjs'
-import { useDelayPlay } from '../tool'
-
-import { type Video, CameraEnum } from '../model'
+import MiniPlay from './mini-player'
+import EvidenceTools from './evidence-tools'
+import { type CameraId, type Video } from '../model'
+import { getAvailableCameras } from '../tesla-cam'
+import { reverseGeocode } from '../utils/geocode'
 
 const useStyles = makeStyles({
   root: {
-    ...shorthands.padding(0, '20px'),
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
+    ...shorthands.padding(0, '20px', '20px'),
+    display: 'flex',
+    flexDirection: 'column',
+    ...shorthands.gap('14px'),
   },
-  videoWrap: {
-    display: 'block',
-    position: 'relative',
+  cameraGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
+    ...shorthands.gap('10px'),
+    width: '100%',
   },
-  video: {
-    width: '800px',
-    height: '600px',
-    backgroundColor: tokens.colorNeutralBackground5Selected,
-    '@media screen and (min-width: 1440px)': {
-      width: '1000px',
-      height: '750px',
-    },
-    '@media screen and (min-width: 1680px)': {
-      width: '1200px',
-      height: '900px',
-    },
+  statusRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    ...shorthands.gap('8px'),
   },
-  time: {
-    position: 'absolute',
-    top: '40px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    textAlign: 'center',
-    minWidth: '280px',
-    color: tokens.colorNeutralBackground1Hover,
+  timestamp: {
+    color: tokens.colorNeutralForeground1,
     fontSize: '18px',
-    fontWeight: 500,
-    ...shorthands.padding('4px', '8px'),
-    letterSpacing: '2px',
-    backgroundColor: tokens.colorNeutralStencil1Alpha,
-    ...shorthands.borderRadius('2px'),
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+    letterSpacing: '1px',
+  },
+  location: {
+    display: 'flex',
+    alignItems: 'center',
+    ...shorthands.gap('4px'),
+    color: tokens.colorNeutralForeground2,
+  },
+  locationIcon: {
+    cursor: 'pointer',
+    flexShrink: 0,
+    ':active': {
+      color: tokens.colorNeutralForeground3,
+    },
+  },
+  cameraCount: {
+    color: tokens.colorNeutralForeground3,
   },
   controlWrap: {
     display: 'flex',
@@ -57,23 +71,21 @@ const useStyles = makeStyles({
     flexGrow: 1,
   },
   sliderTime: {
-    minWidth: '40px',
+    minWidth: '48px',
     textAlign: 'center',
+    fontVariantNumeric: 'tabular-nums',
   },
   iconButton: {
     cursor: 'pointer',
+    flexShrink: 0,
     ':active': {
       color: tokens.colorNeutralForeground2,
     },
   },
   empty: {
-
-  },
-  playFocusInput: {
-    opacity: 0,
-    position: 'fixed',
-    top: '-100vh',
-    left: '-100vw',
+    ...shorthands.padding('40px'),
+    textAlign: 'center',
+    color: tokens.colorNeutralForeground3,
   },
 })
 
@@ -81,184 +93,213 @@ interface PlayerProps {
   video?: Video
 }
 
-function getSrc(camera: CameraEnum, video: Video): string {
-  switch (camera) {
-    case CameraEnum.前:
-      return video.src_f
-    case CameraEnum.后:
-      return video.src_b
-    case CameraEnum.左:
-      return video.src_l
-    case CameraEnum.右:
-      return video.src_r
-  }
-}
-
 function fmtTime(time: number) {
-  const minutes = Math.floor(time / 60)
-  const seconds = Math.ceil(time % 60)
-  return `${minutes}:${seconds}`
+  const safeTime = Math.max(0, time)
+  const minutes = Math.floor(safeTime / 60)
+  const seconds = Math.floor(safeTime % 60)
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
-const Player: React.FC<React.PropsWithChildren<PlayerProps>> = (props) => {
+const Player: React.FC<PlayerProps> = ({ video }) => {
   const styles = useStyles()
-  const [currentCamera, setCurrentCamera] = useState(CameraEnum.前)
-  const [currentTime, setCurrentTime] = useState(CameraEnum.前)
+  const availableCameras = useMemo(
+    () => video ? getAvailableCameras(video) : [],
+    [video],
+  )
+  const [currentCamera, setCurrentCamera] = useState<CameraId>(
+    availableCameras[0]?.id ?? 'front',
+  )
+  const [currentTime, setCurrentTime] = useState(0)
   const [paused, setPaused] = useState(true)
-  const [duration, setDuration] = useState(0)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const inputIsFocus = useRef(false)
-  const { delayPlay } = useDelayPlay()
-  function onKeyUp(e: Parameters<React.KeyboardEventHandler>[0]) {
-    e.preventDefault()
-    switch (e.code) {
-      case 'Space':
-        if (videoRef.current?.paused) {
-          play()
-        } else {
-          pause()
-        }
-        break
-      case 'KeyW':
-        onSelectCamera(CameraEnum.前)
-        break
-      case 'KeyS':
-        onSelectCamera(CameraEnum.后)
-        break
-      case 'KeyA':
-        onSelectCamera(CameraEnum.左)
-        break
-      case 'KeyD':
-        onSelectCamera(CameraEnum.右)
-        break
-      default:
-      //
+  const [durations, setDurations] = useState<Partial<Record<CameraId, number>>>({})
+  const [resolvedLocation, setResolvedLocation] = useState<string | undefined>(undefined)
+  const [eventKey, setEventKey] = useState(`${video?.event?.lat ?? ''},${video?.event?.lon ?? ''}`)
+  const currentEventKey = `${video?.event?.lat ?? ''},${video?.event?.lon ?? ''}`
+  if (eventKey !== currentEventKey) {
+    setEventKey(currentEventKey)
+    setResolvedLocation(undefined)
+  }
+  const videoRefs = useRef<Partial<Record<CameraId, HTMLVideoElement | null>>>({})
+  const playerRootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    if (!video?.event?.lat || !video?.event?.lon) return
+    reverseGeocode(video.event.lat, video.event.lon, video.event.city)
+      .then(resolved => {
+        if (!cancelled) setResolvedLocation(resolved.description)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [video?.event?.lat, video?.event?.lon, video?.event?.city])
+
+  const displayLocation = resolvedLocation
+    ?? (video?.event?.city
+      ? `${video.event.city}${video.event.lat && video.event.lon ? ` (${video.event.lat}, ${video.event.lon})` : ''}`
+      : video?.event?.lat && video?.event?.lon
+        ? `${video.event.lat}, ${video.event.lon}`
+        : undefined)
+
+  const durationValues = Object.values(durations).filter(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value),
+  )
+  const duration = durationValues.length ? Math.min(...durationValues) : 0
+
+  const syncAll = (time: number) => {
+    availableCameras.forEach(({ id }) => {
+      const element = videoRefs.current[id]
+      if (!element || !Number.isFinite(element.duration)) return
+      element.currentTime = Math.min(time, element.duration)
+    })
+  }
+
+  const play = async () => {
+    syncAll(currentTime)
+    const results = await Promise.allSettled(
+      availableCameras.map(({ id }) => videoRefs.current[id]?.play()),
+    )
+    if (results.some(result => result.status === 'fulfilled')) {
+      setPaused(false)
     }
   }
-  function onSelectCamera(val: CameraEnum) {
-    if (!videoRef.current) return
-    setCurrentCamera(val)
-    const prePaused = videoRef.current.paused
-    const currentTime = videoRef.current.currentTime
-    videoRef.current.pause()
-    videoRef.current.src = getSrc(val, props.video!)
-    videoRef.current.currentTime = currentTime
-    if (!prePaused) {
-      delayPlay(videoRef.current)
-    }
-  }
-  function onTimeupdate() {
-    if (!videoRef.current) return
-    if (videoRef.current.currentTime >= videoRef.current.duration) {
-      setCurrentTime(0)
-      videoRef.current.pause()
-    } else {
-      setCurrentTime(videoRef.current.currentTime)
-    }
-  }
-  function play() {
-    if (!videoRef.current) return
-    videoRef.current.play()
-    setPaused(false)
-  }
-  function pause() {
-    if (!videoRef.current) return
-    videoRef.current.pause()
+
+  const pause = () => {
+    availableCameras.forEach(({ id }) => videoRefs.current[id]?.pause())
     setPaused(true)
   }
-  function onLoadedMetadata() {
-    if (!videoRef.current) return
-    setDuration(videoRef.current.duration)
-  }
-  function onSeek(val: number) {
-    if (!videoRef.current) return
-    const prePaused = videoRef.current.paused
-    videoRef.current.pause()
-    setCurrentTime(val)
-    videoRef.current.currentTime = val
-    if (!prePaused) {
-      delayPlay(videoRef.current)
-    }
-  }
-  function onPlayFocus() {
-    inputIsFocus.current = true
-  }
-  function onPlayBlur() {
-    inputIsFocus.current = false
-  }
-  return (
-    <div className={styles.root}>
-      {
-        props.video ? (
-          <div className={styles.root}>
-            <label className={styles.videoWrap} htmlFor="player-focus-input">
-              <video
-                muted
-                className={styles.video}
-                id="player"
-                ref={videoRef}
-                onLoadedMetadata={onLoadedMetadata}
-                onPause={() => setPaused(true)}
-                onPlay={() => setPaused(false)}
-                onTimeUpdate={onTimeupdate}
-              >
-                <source src={getSrc(currentCamera, props.video)} type="video/mp4" />
-              </video>
-              {
-                  [CameraEnum.前, CameraEnum.后, CameraEnum.左, CameraEnum.右].map(camera => (
-                    <MiniPlay
-                      camera={camera}
-                      currentTime={currentTime}
-                      isActive={currentCamera === camera}
-                      key={camera}
-                      paused={paused}
-                      src={getSrc(camera, props.video!)}
-                      onClick={() => onSelectCamera(camera)}
-                    />
-                  ))
-                }
-              <div className={styles.time}>
-                {dayjs(props.video.time + currentTime * 1000).format('YYYY年MM月DD日 HH:mm:ss')}
-              </div>
-            </label>
-            <div className={styles.controlWrap}>
-              {
-                  paused
-                    ? <Play24Filled
-                        className={styles.iconButton}
-                        onClick={play}
-                      />
-                    : <Pause24Filled
-                        className={styles.iconButton}
-                        onClick={pause}
-                      />
-                }
-              <div className={styles.sliderTime}>{fmtTime(currentTime)}</div>
-              <Slider
-                className={styles.slider}
-                max={duration}
-                min={0}
-                value={currentTime}
-                onChange={(_, data) => onSeek(data.value)}
-              />
-              <div className={styles.sliderTime}>{fmtTime(duration)}</div>
-            </div>
-            <input
-              autoFocus
-              className={styles.playFocusInput}
-              id="player-focus-input"
-              onBlur={onPlayBlur}
-              onFocus={onPlayFocus}
-              onKeyUp={onKeyUp}
-            />
-          </div>
-        ) : (
-          <div className={styles.empty}>
-            暂无数据
-          </div>
-        )
-      }
 
+  const onSeek = (value: number) => {
+    const nextTime = Math.min(value, duration)
+    syncAll(nextTime)
+    setCurrentTime(nextTime)
+  }
+
+  const onSelectCamera = (camera: CameraId) => {
+    setCurrentCamera(camera)
+    playerRootRef.current?.focus()
+  }
+
+  const onTimeUpdate = (camera: CameraId, element: HTMLVideoElement) => {
+    if (camera !== currentCamera) return
+    const nextTime = Math.min(element.currentTime, duration || element.currentTime)
+    setCurrentTime(nextTime)
+    availableCameras.forEach(({ id }) => {
+      if (id === camera) return
+      const other = videoRefs.current[id]
+      if (!other || Math.abs(other.currentTime - nextTime) <= 0.2) return
+      other.currentTime = Math.min(nextTime, other.duration || nextTime)
+    })
+  }
+
+  const onKeyUp = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLInputElement) return
+    if (event.code === 'Space') {
+      event.preventDefault()
+      if (paused) void play()
+      else pause()
+      return
+    }
+    const shortcut = event.key.toUpperCase()
+    const camera = availableCameras.find(item => item.shortcut === shortcut)
+    if (camera) onSelectCamera(camera.id)
+  }
+
+  if (!video || !availableCameras.length) {
+    return <div className={styles.empty}>暂无可播放的视频数据</div>
+  }
+
+  return (
+    <div
+      className={styles.root}
+      ref={playerRootRef}
+      tabIndex={0}
+      onKeyUp={onKeyUp}
+    >
+      <div className={styles.statusRow}>
+        <div className={styles.timestamp}>
+          {dayjs(video.time + currentTime * 1000).format('YYYY年MM月DD日 HH:mm:ss')}
+        </div>
+        <div className={styles.location}>
+          {displayLocation
+            ? (
+              <>
+                <Caption1>{displayLocation}</Caption1>
+                <Tooltip content="复制地点信息" relationship="label">
+                  <Button
+                    appearance="subtle"
+                    className={styles.locationIcon}
+                    icon={<Copy24Regular />}
+                    onClick={() => void navigator.clipboard.writeText(displayLocation)}
+                  />
+                </Tooltip>
+              </>
+            )
+            : null}
+        </div>
+        <div className={styles.cameraCount}>
+          当前片段包含 {availableCameras.length} 路摄像头，点击画面选择取证视角
+        </div>
+      </div>
+
+      <div className={styles.cameraGrid}>
+        {availableCameras.map(camera => (
+          <MiniPlay
+            camera={camera}
+            key={camera.id}
+            selected={currentCamera === camera.id}
+            source={video.sources[camera.id]!}
+            registerRef={(element) => {
+              videoRefs.current[camera.id] = element
+            }}
+            onEnded={pause}
+            onLoadedMetadata={(cameraDuration) => {
+              setDurations(current => ({ ...current, [camera.id]: cameraDuration }))
+            }}
+            onSelect={() => onSelectCamera(camera.id)}
+            onTimeUpdate={element => onTimeUpdate(camera.id, element)}
+          />
+        ))}
+      </div>
+
+      <div className={styles.controlWrap}>
+        {paused
+          ? (
+              <Button
+                appearance="subtle"
+                aria-label="播放全部画面"
+                className={styles.iconButton}
+                icon={<Play24Filled />}
+                onClick={() => void play()}
+              />
+            )
+          : (
+              <Button
+                appearance="subtle"
+                aria-label="暂停全部画面"
+                className={styles.iconButton}
+                icon={<Pause24Filled />}
+                onClick={pause}
+              />
+            )}
+        <div className={styles.sliderTime}>{fmtTime(currentTime)}</div>
+        <Slider
+          className={styles.slider}
+          max={duration}
+          min={0}
+          step={0.1}
+          value={currentTime}
+          onChange={(_, data) => onSeek(data.value)}
+        />
+        <div className={styles.sliderTime}>{fmtTime(duration)}</div>
+      </div>
+
+      <EvidenceTools
+        camera={currentCamera}
+        currentTime={currentTime}
+        duration={duration}
+        getSelectedVideo={() => videoRefs.current[currentCamera] ?? null}
+        video={video}
+      />
     </div>
   )
 }

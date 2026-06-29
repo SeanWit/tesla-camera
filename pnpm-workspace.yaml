@@ -1,5 +1,6 @@
 allowBuilds:
   '@parcel/watcher': true
+  tesseract.js: true
 minimumReleaseAgeExclude:
   - '@fluentui/react-icons@2.0.329'
   - '@typescript-eslint/eslint-plugin@8.61.0'

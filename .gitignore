@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+
+# 本地环境变量（含高德地图 App Key 等敏感信息，通过 .env.local / .env.tauri.local 注入）
 *.local
 
 # Editor directories and files
@@ -24,3 +26,6 @@ dist-ssr
 *.sw?
 
 .xwin-cache
+
+# Tauri 自动生成的 schema（构建时重建）
+src-tauri/gen/

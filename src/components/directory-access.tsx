@@ -9,6 +9,7 @@ import dayjs from 'dayjs'
 import {
   type OriginVideo, TypeEnum, type VideoFile, type EventJson, type FileData,
 } from '../model'
+import { assignCameraSource, parseVideoFileName } from '../tesla-cam'
 
 interface DirectoryAccessProps {
   onAccess: (accessFile: OriginVideo[]) => void
@@ -56,47 +57,36 @@ function nameToTitle(name: string): string {
 }
 
 function convertFiles(videoFiles: VideoFile[]): OriginVideo[] {
-  const reg = /^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}-.+/
-  const videos: Record<string, Partial<OriginVideo>> = {}
+  const videos: Record<string, OriginVideo> = {}
   videoFiles.forEach(({ fs, path, dir }) => {
-    if (!reg.test(fs.name)) {
-      return
-    }
-    const name = fs.name.slice(0, 19)
-    let exists = videos[name]
+    const parsed = parseVideoFileName(fs.name)
+    if (!parsed) return
+    const { timeName } = parsed
+    const key = `${dir}|${timeName}`
+    let exists = videos[key]
     if (!exists) {
       exists = {
-        title: nameToTitle(name),
-        time: nameToTime(name),
+        title: nameToTitle(timeName),
+        time: nameToTime(timeName),
         type: pathToType(path),
         dir,
+        sources: {},
       }
-      videos[name] = exists
+      videos[key] = exists
     }
     const fsData: FileData = {
       async get() {
         return {
           url: URL.createObjectURL(await fs.getFile()),
-          name,
+          name: fs.name,
         }
       },
-      name,
+      name: fs.name,
       path,
     }
-    if (fs.name.includes('front')) {
-      exists.src_f = fsData
-    }
-    if (fs.name.includes('back')) {
-      exists.src_b = fsData
-    }
-    if (fs.name.includes('right_repeater')) {
-      exists.src_r = fsData
-    }
-    if (fs.name.includes('left_repeater')) {
-      exists.src_l = fsData
-    }
+    assignCameraSource(exists.sources, fs.name, fsData)
   })
-  return Object.values(videos) as OriginVideo[]
+  return Object.values(videos)
 }
 
 const DirectoryAccess: React.FC<React.PropsWithChildren<DirectoryAccessProps>> = props => {
@@ -118,7 +108,14 @@ const DirectoryAccess: React.FC<React.PropsWithChildren<DirectoryAccessProps>> =
         const event = events[eIndex]
         events.splice(eIndex, 1)
         if (newVideos[vIndex - 1]) {
-          newVideos[vIndex - 1].event = dayjs(event.timestamp).valueOf()
+          newVideos[vIndex - 1].event = {
+            time: dayjs(event.timestamp).valueOf(),
+            city: event.city,
+            lat: event.est_lat,
+            lon: event.est_lon,
+            reason: event.reason,
+            camera: event.camera,
+          }
         }
       }
     })

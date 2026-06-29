@@ -66,8 +66,8 @@
     "windows": [
       {
         "fullscreen": false,
-        "minWidth": 1280,
-        "minHeight": 800,
+        "minWidth": 800,
+        "minHeight": 700,
         "resizable": true,
         "title": "TeslaCamera",
         "useHttpsScheme": true
@@ -80,7 +80,7 @@
         ],
         "enable": true
       },
-      "csp": "null; connect-src ipc: http://ipc.localhost"
+      "csp": "null; connect-src ipc: http://ipc.localhost https://restapi.amap.com https://webapi.amap.com; script-src 'unsafe-inline' 'unsafe-eval' https://webapi.amap.com; img-src https://webapi.amap.com data: blob: asset: https://*.amap.com; frame-src https://uri.amap.com"
     }
   }
 }

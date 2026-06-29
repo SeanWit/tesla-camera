@@ -10,6 +10,7 @@ import {
   type OriginVideo, TypeEnum, type TauriFile, type EventJson,
   type FileData,
 } from '../model'
+import { assignCameraSource, parseVideoFileName } from '../tesla-cam'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { readTextFile, readDir, type DirEntry } from '@tauri-apps/plugin-fs'
@@ -60,22 +61,23 @@ async function getDirFiles(dir: string): Promise<TauriFile[]> {
 }
 
 function convertVideoFiles(videoFiles: TauriFile[]): OriginVideo[] {
-  const reg = /^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}-.+/
-  const videos: Record<string, Partial<OriginVideo>> = {}
+  const videos: Record<string, OriginVideo> = {}
   videoFiles.forEach(({ name, path }) => {
-    if (!reg.test(name)) {
-      return
-    }
-    const timeName = name.slice(0, 19)
-    let exists = videos[timeName]
+    const parsed = parseVideoFileName(name)
+    if (!parsed) return
+    const { timeName } = parsed
+    const dir = path.replace(name, '')
+    const key = `${dir}|${timeName}`
+    let exists = videos[key]
     if (!exists) {
       exists = {
         title: nameToTitle(timeName),
         time: nameToTime(timeName),
         type: pathToType(path),
-        dir: path.replace(name, ''),
+        dir,
+        sources: {},
       }
-      videos[timeName] = exists
+      videos[key] = exists
     }
     const fs: FileData = {
       async get() {
@@ -87,20 +89,9 @@ function convertVideoFiles(videoFiles: TauriFile[]): OriginVideo[] {
       name,
       path,
     }
-    if (name.includes('front')) {
-      exists.src_f = fs
-    }
-    if (name.includes('back')) {
-      exists.src_b = fs
-    }
-    if (name.includes('right_repeater')) {
-      exists.src_r = fs
-    }
-    if (name.includes('left_repeater')) {
-      exists.src_l = fs
-    }
+    assignCameraSource(exists.sources, name, fs)
   })
-  return Object.values(videos) as OriginVideo[]
+  return Object.values(videos)
 }
 
 const FsSystem: React.FC<FsSystemProps> = props => {
@@ -129,7 +120,14 @@ const FsSystem: React.FC<FsSystemProps> = props => {
           const event = events[eIndex]
           events.splice(eIndex, 1)
           if (newVideos[vIndex - 1]) {
-            newVideos[vIndex - 1].event = dayjs(event.timestamp).valueOf()
+            newVideos[vIndex - 1].event = {
+              time: dayjs(event.timestamp).valueOf(),
+              city: event.city,
+              lat: event.est_lat,
+              lon: event.est_lon,
+              reason: event.reason,
+              camera: event.camera,
+            }
           }
         }
       })

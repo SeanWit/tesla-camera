@@ -4,3 +4,12 @@ declare interface Window {
 }
 
 declare module '*.css'
+
+declare const process: {
+  env: {
+    PUBLIC_AMAP_KEY?: string
+    PUBLIC_ASSET_PREFIX?: string
+    TESLA_CAM_SAMPLE_DIR?: string
+    [key: string]: string | undefined
+  }
+}

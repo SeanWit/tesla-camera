@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import cln from 'classnames'
 import {
   makeStyles,
@@ -17,15 +17,23 @@ import {
 } from '@fluentui/react-icons'
 import Player from './components/player'
 import DirectoryAccess from './components/directory-access'
-import FfmpegTerminal from './components/ffmpeg-terminal'
-import FfmpegExport from './components/ffmpeg-export'
 import FsSystem from './components/fs-system'
 import CheckUpdate from './components/check-update'
-import { TypeEnum, type ModelState, type OriginVideo } from './model'
+import {
+  CAMERAS, TypeEnum, type CameraId, type ModelState, type OriginVideo, type Video,
+  type VideoSource,
+} from './model'
+import { isTauri } from '@tauri-apps/api/core'
+import dayjs from 'dayjs'
 
 const useStyles = makeStyles({
   root: {
     display: 'flex',
+    height: '100vh',
+    minWidth: 0,
+    '@media screen and (max-width: 900px)': {
+      flexDirection: 'column',
+    },
   },
   aside: {
     width: '330px',
@@ -34,6 +42,10 @@ const useStyles = makeStyles({
     display: 'flex',
     flexShrink: 0,
     flexDirection: 'column',
+    '@media screen and (max-width: 900px)': {
+      width: '100%',
+      height: '180px',
+    },
   },
   empty: {
     textAlign: 'center',
@@ -53,6 +65,12 @@ const useStyles = makeStyles({
     display: 'flex',
     rowGap: '14px',
     flexDirection: 'column',
+    '@media screen and (max-width: 900px)': {
+      flexDirection: 'row',
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      ...shorthands.padding('10px', '20px'),
+    },
   },
   eventTag: {
     flexGrow: '1',
@@ -68,6 +86,7 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     columnGap: '12px',
     color: tokens.colorNeutralForeground1,
+    flexShrink: 0,
     ':hover': {
       color: tokens.colorCompoundBrandStrokePressed,
     },
@@ -82,11 +101,17 @@ const useStyles = makeStyles({
     height: '100vh',
     ...shorthands.overflow('hidden', 'auto'),
     flexGrow: 1,
+    minWidth: 0,
     backgroundColor: tokens.colorSubtleBackgroundHover,
+    '@media screen and (max-width: 900px)': {
+      height: 'calc(100vh - 180px)',
+    },
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    ...shorthands.gap('10px'),
     ...shorthands.padding('20px'),
   },
   headerLeft: {
@@ -132,11 +157,38 @@ const tabs = [
   },
 ]
 
+function getDevelopmentSample(): Video | undefined {
+  if (!import.meta.env.DEV) return
+  const samplePrefix = new URLSearchParams(window.location.search).get('sample')
+  if (!samplePrefix) return
+  const timeName = samplePrefix.split('/').pop()
+  if (!timeName) return
+  const time = dayjs(
+    `${timeName.slice(0, 10)} ${timeName.slice(11, 13)}:${timeName.slice(14, 16)}:${timeName.slice(17, 19)}`,
+  ).valueOf()
+  return {
+    title: dayjs(time).format('YYYY年MM月DD日 HH:mm:ss'),
+    time,
+    type: TypeEnum.行车记录仪,
+    dir: samplePrefix.slice(0, samplePrefix.lastIndexOf('/') + 1),
+    sources: Object.fromEntries(CAMERAS.map(camera => [
+      camera.id,
+      {
+        name: `${timeName}-${camera.id}.mp4`,
+        path: `${samplePrefix}-${camera.id}.mp4`,
+        url: `${samplePrefix}-${camera.id}.mp4`,
+      },
+    ])),
+  }
+}
+
 function App() {
   const styles = useStyles()
+  const selectionRequest = useRef(0)
   const [filterType, setFilterType] = useState(TypeEnum.所有)
   const [state, setState] = useState<ModelState>({
     type: TypeEnum.所有,
+    current: getDevelopmentSample(),
     list: [],
     events: [],
   })
@@ -151,51 +203,41 @@ function App() {
     }
   }, [])
   function onFileSystemAccess(videos: OriginVideo[]) {
-    setState({
-      ...state,
-      list: videos,
+    setState(current => {
+      Object.values(current.current?.sources ?? {}).forEach(source => URL.revokeObjectURL(source.url))
+      return {
+        ...current,
+        current: undefined,
+        list: videos,
+      }
     })
   }
-  async function onSelectVideo(value: number) {
-    if (state.current) {
-      const {
-        src_f, src_b, src_l, src_r,
-      } = state.current
-      URL.revokeObjectURL(src_f)
-      URL.revokeObjectURL(src_b)
-      URL.revokeObjectURL(src_l)
-      URL.revokeObjectURL(src_r)
+  async function onSelectVideo(origin: OriginVideo) {
+    const requestId = ++selectionRequest.current
+    const sourceEntries = Object.entries(origin.sources) as [CameraId, NonNullable<OriginVideo['sources'][CameraId]>][]
+    const loadedEntries = await Promise.all(sourceEntries.map(async ([camera, source]) => {
+      const loaded = await source.get()
+      const videoSource: VideoSource = {
+        url: loaded.url,
+        name: loaded.name,
+        path: source.path,
+      }
+      return [camera, videoSource] as const
+    }))
+    if (requestId !== selectionRequest.current) {
+      loadedEntries.forEach(([, source]) => URL.revokeObjectURL(source.url))
+      return
     }
-    const origin = state.list.find(({ time }) => time === value)
-    if (!origin) return
-    const [
-      src_f_file,
-      src_b_file,
-      src_l_file,
-      src_r_file,
-    ] = [
-      await origin.src_f.get(),
-      await origin.src_b.get(),
-      await origin.src_l.get(),
-      await origin.src_r.get(),
-    ]
-    setState({
-      ...state,
-      current: {
-        ...origin,
-        src_f: src_f_file.url,
-        src_f_name: src_f_file.name,
-        src_f_path: origin.src_f.path,
-        src_b: src_b_file.url,
-        src_b_name: src_b_file.name,
-        src_b_path: origin.src_b.path,
-        src_l: src_l_file.url,
-        src_l_name: src_l_file.name,
-        src_l_path: origin.src_l.path,
-        src_r: src_r_file.url,
-        src_r_name: src_r_file.name,
-        src_r_path: origin.src_r.path,
-      },
+
+    setState(current => {
+      Object.values(current.current?.sources ?? {}).forEach(source => URL.revokeObjectURL(source.url))
+      return {
+        ...current,
+        current: {
+          ...origin,
+          sources: Object.fromEntries(loadedEntries),
+        },
+      }
     })
   }
   const videoList = state.list
@@ -224,9 +266,12 @@ function App() {
             {
               videoList.map((item) => (
                 <div
-                  className={cln(styles.menuItem, { [styles.menuItemIsActive]: item.time === state.current?.time })}
-                  key={item.time}
-                  onClick={() => onSelectVideo(item.time)}
+                  className={cln(styles.menuItem, {
+                    [styles.menuItemIsActive]: item.time === state.current?.time
+                      && item.dir === state.current?.dir,
+                  })}
+                  key={`${item.dir}:${item.time}`}
+                  onClick={() => void onSelectVideo(item)}
                   onKeyDown={(e) => {
                     e.preventDefault()
                   }}
@@ -237,7 +282,16 @@ function App() {
                   <Record24Regular />
                   {item.title}
                   <div className={styles.eventTag}>
-                    {item.event ? <Badge color="danger" size="extra-small" /> : null}
+                    {item.event
+                      ? (
+                        <Tooltip
+                          content={item.event.reason ?? '事件触发'}
+                          relationship="label"
+                        >
+                          <Badge color="danger" size="extra-small" />
+                        </Tooltip>
+                      )
+                      : null}
                   </div>
                 </div>
               ))
@@ -248,12 +302,9 @@ function App() {
         <div className={styles.content}>
           <div className={styles.header}>
             <div className={styles.headerLeft}>
-              {window.__TAURI_IPC__
+              {isTauri()
                 ? <FsSystem onAccess={onFileSystemAccess} />
                 : <DirectoryAccess onAccess={onFileSystemAccess} />}
-              {window.__TAURI_IPC__ && state.current
-                ? <FfmpegExport video={state.current} />
-                : <FfmpegTerminal video={state.current} />}
             </div>
             <div className={styles.headerRight}>
               <CheckUpdate />
@@ -291,7 +342,10 @@ function App() {
             </div>
           </div>
           <div className={styles.player}>
-            <Player key={state.current?.time} video={state.current} />
+            <Player
+              key={state.current ? `${state.current.dir}:${state.current.time}` : 'empty'}
+              video={state.current}
+            />
           </div>
         </div>
       </div>

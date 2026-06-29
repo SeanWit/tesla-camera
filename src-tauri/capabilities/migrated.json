@@ -11,6 +11,16 @@
     "fs:default",
     "notification:default",
     "shell:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/ffmpeg",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
     "updater:default"
   ]
 }
