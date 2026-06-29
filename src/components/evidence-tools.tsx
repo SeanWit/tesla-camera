@@ -3,14 +3,16 @@ import {
   Button,
   Caption1,
   Checkbox,
+  Dropdown,
   Field,
   Link,
   makeStyles,
+  Option,
   ProgressBar,
   shorthands,
   tokens,
 } from '@fluentui/react-components'
-import { Copy24Regular, Map24Regular, CheckmarkCircle24Regular, DismissCircle24Regular } from '@fluentui/react-icons'
+import { Copy24Regular, Map24Regular, CheckmarkCircle24Regular, DismissCircle24Regular, VehicleCar24Regular } from '@fluentui/react-icons'
 import { isTauri } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { Command } from '@tauri-apps/plugin-shell'
@@ -18,6 +20,13 @@ import dayjs from 'dayjs'
 import type { CameraId, EventInfo, Video } from '../model'
 import { getCamera } from '../tesla-cam'
 import { reverseGeocode } from '../utils/geocode'
+import { recognizePlate, cropCenterRegion, enhanceForOCR } from '../utils/plate-ocr'
+import {
+  VIOLATION_TYPES,
+  generateFullReportText,
+  isCompliant,
+  type ViolationType,
+} from '../utils/violation-report'
 import RangeTimeline from './range-timeline'
 import LocationMap from './location-map'
 
@@ -124,6 +133,25 @@ const useStyles = makeStyles({
     color: tokens.colorPaletteRedForeground1,
     fontWeight: 600,
   },
+  violationSelect: {
+    minWidth: '200px',
+    maxWidth: '100%',
+  },
+  violationRow: {
+    display: 'flex',
+    alignItems: 'center',
+    ...shorthands.gap('8px'),
+    flexWrap: 'wrap',
+  },
+  violationBlock: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    ...shorthands.borderRadius('6px'),
+    ...shorthands.padding('10px', '12px'),
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    fontSize: '13px',
+    lineHeight: '1.6',
+  },
 })
 
 function formatSeconds(value: number) {
@@ -217,11 +245,14 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
   const styles = useStyles()
   const [rangeStart, setRangeStart] = useState(0)
   const [rangeEnd, setRangeEnd] = useState(0)
-  const [busy, setBusy] = useState<'screenshot' | 'clip' | null>(null)
+  const [busy, setBusy] = useState<'screenshot' | 'clip' | 'ocr' | null>(null)
   const [progress, setProgress] = useState(0)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [withLocation, setWithLocation] = useState(true)
+  const [plateNumber, setPlateNumber] = useState<string | null>(null)
+  const [ocrProgress, setOcrProgress] = useState(0)
+  const [violationType, setViolationType] = useState<ViolationType | ''>('')
   const [resolvedLocation, setResolvedLocation] = useState<string | undefined>(undefined)
   const [eventKey, setEventKey] = useState(`${video.event?.lat ?? ''},${video.event?.lon ?? ''}`)
   const currentEventKey = `${video.event?.lat ?? ''},${video.event?.lon ?? ''}`
@@ -234,10 +265,20 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
     duration: number
     location?: string
     reason?: string
+    plateNumber?: string | null
   } | null>(null)
   const previousVideoTime = useRef(video.time)
   const source = video.sources[camera]
   const cameraDefinition = getCamera(camera)
+
+  const videoKey = `${video.dir}:${video.time}`
+  const [appliedVideoKey, setAppliedVideoKey] = useState(videoKey)
+  if (appliedVideoKey !== videoKey) {
+    setAppliedVideoKey(videoKey)
+    setPlateNumber(null)
+    setOcrProgress(0)
+    setViolationType('')
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -267,11 +308,69 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
     [rangeEnd, rangeStart],
   )
 
+  const reportTime = reportCard?.time ?? video.time + currentTime * 1000
+  const reportDuration = reportCard?.duration ?? 0
+  const violationText = useMemo(() => {
+    if (!violationType) return ''
+    return generateFullReportText({
+      violationType,
+      plateNumber: plateNumber ?? undefined,
+      eventTime: reportTime,
+      location: displayLocation,
+      reason: video.event?.reason,
+      clipDuration: reportDuration > 0 ? reportDuration : undefined,
+    })
+  }, [violationType, plateNumber, reportTime, displayLocation, video.event?.reason, reportDuration])
+
+  const compliance = useMemo(
+    () => violationType && reportDuration > 0
+      ? isCompliant(violationType, reportDuration)
+      : null,
+    [violationType, reportDuration],
+  )
+
   const resetFeedback = () => {
     setError('')
     setMessage('')
     setProgress(0)
     setReportCard(null)
+    setOcrProgress(0)
+  }
+
+  const runPlateOcr = async () => {
+    const selectedVideo = getSelectedVideo()
+    if (!selectedVideo || selectedVideo.readyState < 2) {
+      setError('当前画面尚未加载完成')
+      return
+    }
+    resetFeedback()
+    setBusy('ocr')
+    try {
+      const cropped = cropCenterRegion(
+        selectedVideo,
+        selectedVideo.videoWidth,
+        selectedVideo.videoHeight,
+      )
+      const enhanced = enhanceForOCR(cropped)
+      const result = await recognizePlate(enhanced, setOcrProgress)
+      setPlateNumber(result.plateNumber)
+      if (result.plateNumber) {
+        setMessage(`已识别车牌：${result.plateNumber}（置信度 ${result.confidence.toFixed(0)}%）`)
+        setReportCard({
+          time: video.time + currentTime * 1000,
+          duration: 0,
+          location: displayLocation,
+          reason: video.event?.reason,
+          plateNumber: result.plateNumber,
+        })
+      } else {
+        setError(`未识别到有效车牌。原始文本：${result.rawText.trim() || '（空）'}`)
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(null)
+    }
   }
 
   const takeBrowserScreenshot = async (fileName: string) => {
@@ -347,6 +446,7 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
         duration: 0,
         location: displayLocation,
         reason: video.event?.reason,
+        plateNumber,
       })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -398,6 +498,7 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
         duration: outputDuration,
         location: displayLocation,
         reason: video.event?.reason,
+        plateNumber,
       })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -447,6 +548,14 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
           >
             导出完整单段
           </Button>
+          <Button
+            className={styles.actionButton}
+            icon={<VehicleCar24Regular />}
+            disabled={Boolean(busy)}
+            onClick={runPlateOcr}
+          >
+            识别车牌
+          </Button>
         </div>
       </div>
 
@@ -476,11 +585,50 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
         />
       )}
       {busy && (
-        <Field validationMessage={busy === 'clip' ? `正在导出 ${Math.round(progress * 100)}%` : '正在生成截图'}>
-          <ProgressBar value={progress} />
+        <Field validationMessage={
+          busy === 'clip'
+            ? `正在导出 ${Math.round(progress * 100)}%`
+            : busy === 'ocr'
+              ? `正在识别车牌 ${Math.round(ocrProgress * 100)}%`
+              : '正在生成截图'
+        }>
+          <ProgressBar value={busy === 'ocr' ? ocrProgress : progress} />
         </Field>
       )}
       {message && <div>{message}</div>}
+
+      <div className={styles.violationRow}>
+        <span className={styles.reportLabel}>违法行为</span>
+        <Dropdown
+          className={styles.violationSelect}
+          placeholder="选择违法行为生成举报描述"
+          value={violationType
+            ? VIOLATION_TYPES.find(v => v.value === violationType)?.label ?? ''
+            : ''}
+          selectedOptions={violationType ? [violationType] : []}
+          onOptionSelect={(_, data) => {
+            setViolationType(data.selectedOptions[0] as ViolationType | '')
+          }}
+        >
+          {VIOLATION_TYPES.map(option => (
+            <Option key={option.value} value={option.value}>
+              {option.label}
+            </Option>
+          ))}
+        </Dropdown>
+        {violationText && (
+          <Button
+            size="small"
+            icon={<Copy24Regular />}
+            onClick={() => void navigator.clipboard.writeText(violationText)}
+          >
+            复制描述
+          </Button>
+        )}
+      </div>
+      {violationText && (
+        <div className={styles.violationBlock}>{violationText}</div>
+      )}
 
       <div className={styles.bodyRow}>
         {video.event?.lat && video.event?.lon && (
@@ -511,20 +659,48 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
               <Caption1>{reportCard.reason}</Caption1>
             </div>
           )}
+          {reportCard.plateNumber && (
+            <div className={styles.reportRow}>
+              <span className={styles.reportLabel}>车牌</span>
+              <Caption1>{reportCard.plateNumber}</Caption1>
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={<Copy24Regular />}
+                onClick={() => void navigator.clipboard.writeText(reportCard.plateNumber!)}
+              />
+            </div>
+          )}
           {reportCard.duration > 0 && (
             <div className={styles.reportRow}>
               <span className={styles.reportLabel}>片段</span>
               <Caption1>{reportCard.duration.toFixed(1)} 秒</Caption1>
-              {reportCard.duration >= 5
+              {compliance
                 ? (
-                  <span className={styles.compliant}>
-                    <CheckmarkCircle24Regular /> 满足行车违法 ≥5s
-                  </span>
+                  compliance.compliant
+                    ? (
+                      <span className={styles.compliant}>
+                        <CheckmarkCircle24Regular /> 满足 ≥{compliance.minSeconds}s 要求
+                      </span>
+                    )
+                    : (
+                      <span className={styles.nonCompliant}>
+                        <DismissCircle24Regular /> 不足 {compliance.minSeconds}s，可能被驳回
+                      </span>
+                    )
                 )
                 : (
-                  <span className={styles.nonCompliant}>
-                    <DismissCircle24Regular /> 不足 5s，可能被驳回
-                  </span>
+                  reportCard.duration >= 5
+                    ? (
+                      <span className={styles.compliant}>
+                        <CheckmarkCircle24Regular /> 满足行车违法 ≥5s
+                      </span>
+                    )
+                    : (
+                      <span className={styles.nonCompliant}>
+                        <DismissCircle24Regular /> 不足 5s，可能被驳回
+                      </span>
+                    )
                 )}
             </div>
           )}
@@ -536,6 +712,7 @@ const EvidenceTools: React.FC<EvidenceToolsProps> = ({
                 [
                   `时间：${dayjs(reportCard.time).format('YYYY-MM-DD HH:mm:ss')}`,
                   reportCard.location ? `地点：${reportCard.location}` : null,
+                  reportCard.plateNumber ? `车牌：${reportCard.plateNumber}` : null,
                   reportCard.reason ? `事件：${reportCard.reason}` : null,
                   reportCard.duration > 0 ? `片段：${reportCard.duration.toFixed(1)} 秒` : null,
                 ].filter(Boolean).join('\n'),
